@@ -14,7 +14,9 @@
 #define TOC_ENTRY_COUNT_MAX 32
 #define SHA256_LEN	32
 
-typedef struct __attribute__((__packed__)) {
+#define UUID_SCP_FIRMWARE_SCP_BL2 {{0x97,  0x66, 0xfd, 0x3d}, {0x89, 0xbe}, {0xe8, 0x49}, 0xae, 0x5d, {0x78, 0xa1, 0x40, 0x60, 0x82, 0x13} }
+
+typedef struct __attribute__((__packed__)) uuid {
 	unsigned char   __u_bits[16];
 } uuid_t;
 
@@ -74,7 +76,7 @@ void printArray(unsigned char buf[], unsigned int n) {
 	}
 	printf("\n");
 }
-
+/*
 void hash_aml_img(aml_img_header_t *h, unsigned char *hash){
 	unsigned char *img_ptr = (unsigned char*) h;
 	hash_state md;
@@ -88,7 +90,7 @@ void hash_aml_img(aml_img_header_t *h, unsigned char *hash){
 	sha256_process(&md, img_ptr + w21, h->code_len - w21);
 	sha256_done(&md, hash);
 }
-
+*/
 void parse_aml_img_header(aml_img_header_t *h, int overwrite_sha256){
 	printf("magic[@0x0]:\t\t%.4s\n", h->magic);
 	printf("total_len[@0x4]:\t0x%x\n", h->total_len);
@@ -115,15 +117,15 @@ void parse_aml_img_header(aml_img_header_t *h, int overwrite_sha256){
 	}
 	
 	if(h->sig_type == SIG_SHA256){
-		hash_aml_img(h, (unsigned char*)h + h->sig_offset);
+		//hash_aml_img(h, (unsigned char*)h + h->sig_offset);
 		printf("computed_sha256:\t");
 		printArray((unsigned char*)h + h->sig_offset, SHA256_LEN);
 	}
 	printf("\n");
 }
 
-void parse_aml_img_toc(unsigned char *buf, size_t buf_size, int overwrite_sha256){
-	fip_toc_table_t* t = (fip_toc_table_t*)(buf + TOC_OFFSET);
+void parse_aml_img_toc(unsigned char *buf, size_t buf_size, int overwrite_sha256, int offset){
+	fip_toc_table_t* t = (fip_toc_table_t*)(buf);
 	uuid_t uuid_null = {{0}};
 	int i;
 	printf("fip_toc_header.name:\t\t%x\n", t->header.name);
@@ -140,10 +142,10 @@ void parse_aml_img_toc(unsigned char *buf, size_t buf_size, int overwrite_sha256
 		printf("TOC ENTRY #%u\n", i);
 		printf("fip_toc_entry.uuid:\t\t");
 		printArray((unsigned char*)&t->entries[i].uuid, sizeof(uuid_t));
-		printf("fip_toc_entry.offset_address:\t%lx (absolute: 0x%lx)\n", t->entries[i].offset_address, t->entries[i].offset_address + TOC_OFFSET);
+		printf("fip_toc_entry.offset_address:\t%lx (absolute: 0x%lx)\n", t->entries[i].offset_address, t->entries[i].offset_address + offset);
 		printf("fip_toc_entry.size:\t\t0x%lx\n", t->entries[i].size);
 		printf("fip_toc_entry.flags:\t\t0x%lx\n", t->entries[i].flags);
-		parse_aml_img_header((aml_img_header_t *)(buf + t->entries[i].offset_address + TOC_OFFSET), overwrite_sha256);
+		parse_aml_img_header((aml_img_header_t *)(buf + t->entries[i].offset_address), overwrite_sha256);
 	}
 }
 
@@ -174,21 +176,44 @@ int main(int argc, char *argv[])
 		printf("Error: input file too small to read header!\n");
 		exit(-1);
 	}
+
+	// search TOC_HEADER
+	int offset = 0;
+	int found = 0;
+	while (fd_size - offset > sizeof(fip_toc_table_t))
+	{
+		uint32_t tmp;
+		fseek(fd, offset, SEEK_SET);
+		result = fread(&tmp, 1, sizeof(uint32_t), fd);
+
+		if (tmp == TOC_HEADER_NAME) {
+			found = 1;
+			break;
+		}
+			
+		offset++;
+	}
 	
+	if (!found) {
+		printf("Error:no TOC_HEADER found !\n");
+		exit(-1);
+	}
+	
+	fd_size -= offset;
 	buf_in = (unsigned char*) malloc(fd_size);
 	if(!buf_in){
 		printf("Error: cannot allocate input buffer !\n");
 		exit(-1);
 	}
 	
-	fseek (fd, 0, SEEK_SET);
+	fseek (fd, offset, SEEK_SET);
 	result = fread(buf_in, 1, fd_size, fd);
 	if (result != fd_size) {
 		printf("Error: cannot read entire file !\n");
 		exit(-1);
 	}
 	
-	parse_aml_img_toc(buf_in, fd_size, overwrite_sha256);
+	parse_aml_img_toc(buf_in, fd_size, overwrite_sha256, offset);
 	
 	if (overwrite_sha256 >= 0){
 		fseek(fd, 0, SEEK_SET);
